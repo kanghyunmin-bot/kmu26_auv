@@ -105,6 +105,15 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("pressure_topic", default_value="/mavros/imu/static_pressure"),
         DeclareLaunchArgument("pressure_input_mode", default_value="pressure_pa"),
         DeclareLaunchArgument("fluid_density", default_value="1000.0"),
+        DeclareLaunchArgument(
+            "joy_rc_output_topic",
+            default_value="/mavros/rc/override",
+            description=(
+                "joy2mavros output. Set /control/joystick/rc_override when an RC mux "
+                "owns /mavros/rc/override."
+            ),
+        ),
+        DeclareLaunchArgument("joy_release_when_idle", default_value="false"),
     ]
 
     fcu_url = LaunchConfiguration("fcu_url")
@@ -116,6 +125,8 @@ def generate_launch_description() -> LaunchDescription:
     pressure_topic = LaunchConfiguration("pressure_topic")
     pressure_input_mode = LaunchConfiguration("pressure_input_mode")
     fluid_density = LaunchConfiguration("fluid_density")
+    joy_rc_output_topic = LaunchConfiguration("joy_rc_output_topic")
+    joy_release_when_idle = LaunchConfiguration("joy_release_when_idle")
     mavros_launch_file = LaunchConfiguration("mavros_launch_file")
     dronecan_python = LaunchConfiguration("dronecan_python")
     use_external_baro_bridge = LaunchConfiguration("use_external_baro_bridge")
@@ -247,6 +258,12 @@ def generate_launch_description() -> LaunchDescription:
             name="joy2mavros",
             output="screen",
             respawn=True,
+            parameters=[{
+                "rc_output_topic": joy_rc_output_topic,
+                "release_when_idle": ParameterValue(
+                    joy_release_when_idle, value_type=bool
+                ),
+            }],
         ),
         Node(
             package="hit25_auv_ros2",

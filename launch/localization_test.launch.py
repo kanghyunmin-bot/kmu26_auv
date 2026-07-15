@@ -24,9 +24,15 @@ def generate_launch_description() -> LaunchDescription:
     base_frame = LaunchConfiguration("base_frame")
     min_translation = LaunchConfiguration("min_translation")
     max_poses = LaunchConfiguration("max_poses")
+    joy_rc_output_topic = LaunchConfiguration("joy_rc_output_topic")
+    joy_release_when_idle = LaunchConfiguration("joy_release_when_idle")
 
     rov_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(rov_launch_file),
+        launch_arguments={
+            "joy_rc_output_topic": joy_rc_output_topic,
+            "joy_release_when_idle": joy_release_when_idle,
+        }.items(),
     )
 
     localization_debug_node = Node(
@@ -55,6 +61,10 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("base_frame", default_value="base_link"),
             DeclareLaunchArgument("min_translation", default_value="0.0"),
             DeclareLaunchArgument("max_poses", default_value="5000"),
+            DeclareLaunchArgument(
+                "joy_rc_output_topic", default_value="/mavros/rc/override"
+            ),
+            DeclareLaunchArgument("joy_release_when_idle", default_value="false"),
             LogInfo(
                 msg=[
                     "[localization_test] Starting rov_start. Waiting ",

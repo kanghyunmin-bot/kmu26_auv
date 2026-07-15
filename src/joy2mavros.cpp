@@ -1,4 +1,5 @@
 #include <memory>
+#include <cmath>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 #include <mavros_msgs/msg/override_rc_in.hpp>
@@ -13,9 +14,16 @@ public:
     JoyToMavros()
     : Node("joy_to_mavros_node"), led_pwm_(1500)
     {
+        const auto rc_output_topic = this->declare_parameter<std::string>(
+            "rc_output_topic", "/mavros/rc/override"
+        );
+        release_when_idle_ = this->declare_parameter<bool>("release_when_idle", false);
+        axis_deadband_ = std::clamp(
+            this->declare_parameter<double>("axis_deadband", 0.05), 0.0, 0.5
+        );
         // Publisher for RC override
         rc_pub_ = this->create_publisher<mavros_msgs::msg::OverrideRCIn>(
-            "/mavros/rc/override", rclcpp::QoS(10)
+            rc_output_topic, rclcpp::QoS(10)
         );
 
         // Subscriber for joystick inputs
@@ -30,7 +38,11 @@ public:
         // Client for set mode service
         set_mode_client_ = this->create_client<mavros_msgs::srv::SetMode>("/mavros/set_mode");
 
-        RCLCPP_INFO(this->get_logger(), "Joy to Mavros node initialized.");
+        RCLCPP_INFO(
+            this->get_logger(),
+            "Joy to Mavros node initialized. RC output: %s release_when_idle=%s deadband=%.2f",
+            rc_output_topic.c_str(), release_when_idle_ ? "true" : "false", axis_deadband_
+        );
     }
 private:
     rclcpp::Publisher<mavros_msgs::msg::OverrideRCIn>::SharedPtr rc_pub_;
@@ -41,6 +53,8 @@ private:
 
     bool first_msg_received_ = false;
     uint16_t led_pwm_;
+    bool release_when_idle_ = false;
+    double axis_deadband_ = 0.05;
 
     uint16_t scale_axis_to_pwm(float axis_val) {
         return static_cast<uint16_t>(1500 + axis_val * 300);
@@ -95,6 +109,22 @@ private:
 
 
         mavros_msgs::msg::OverrideRCIn rc_override_msg;
+
+        const bool motion_requested =
+            std::abs(axisValue(msg, 0)) > axis_deadband_ ||
+            std::abs(axisValue(msg, 1)) > axis_deadband_ ||
+            std::abs(axisValue(msg, 2)) > axis_deadband_ ||
+            std::abs(axisValue(msg, 3)) > axis_deadband_;
+
+        if (release_when_idle_ && !motion_requested) {
+            std::fill(
+                rc_override_msg.channels.begin(), rc_override_msg.channels.end(),
+                mavros_msgs::msg::OverrideRCIn::CHAN_RELEASE
+            );
+            rc_pub_->publish(rc_override_msg);
+            last_joy_msg_ = msg;
+            return;
+        }
 
 
         for (int i = 0; i < 18; i++) {
