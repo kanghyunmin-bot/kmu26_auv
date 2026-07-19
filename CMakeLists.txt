@@ -50,6 +50,18 @@ if(BUILD_TESTING)
       --executable $<TARGET_FILE:joy2mavros>
   )
   set_tests_properties(joy2mavros_mux_input PROPERTIES TIMEOUT 15)
+  add_test(
+    NAME sim_mavros_time_contract
+    COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/test/test_sim_mavros_time_contract.py
+  )
+  set_tests_properties(sim_mavros_time_contract PROPERTIES TIMEOUT 10)
+  add_test(
+    NAME dvl_frd_to_flu_contract
+    COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/test/test_dvl_frd_to_flu_contract.py
+  )
+  set_tests_properties(dvl_frd_to_flu_contract PROPERTIES TIMEOUT 10)
 endif()
 
 add_executable(odom2mavros src/odom2mavros.cpp)

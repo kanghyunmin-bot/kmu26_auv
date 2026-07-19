@@ -23,7 +23,10 @@ def _default_launch_file(package_name: str, relative_path: str) -> str:
         return ""
 
 
-def _static_tf_node(name, parent_frame, child_frame, x, y, z, roll, pitch, yaw) -> Node:
+def _static_tf_node(
+    name, parent_frame, child_frame, x, y, z, roll, pitch, yaw,
+    use_sim_time, condition=None,
+) -> Node:
     return Node(
         package="tf2_ros",
         executable="static_transform_publisher",
@@ -39,24 +42,38 @@ def _static_tf_node(name, parent_frame, child_frame, x, y, z, roll, pitch, yaw) 
             "--frame-id", parent_frame,
             "--child-frame-id", child_frame,
         ],
+        parameters=[{
+            "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
+        }],
+        condition=condition,
     )
 
 
 def generate_launch_description() -> LaunchDescription:
+    package_share = get_package_share_directory("hit25_auv_ros2")
     dvl_default = _default_launch_file(
         "dvl_a50", os.path.join("launch", "dvl_a50.launch.py")
     )
     mavros_default = _default_launch_file("mavros", os.path.join("launch", "apm.launch"))
+    mavros_sim_default = os.path.join(
+        package_share, "launch", "mavros_apm_sim.launch.py")
     localization_default = os.path.join(
-        get_package_share_directory("hit25_auv_ros2"), "config", "auv_ekf.yaml")
+        package_share, "config", "auv_ekf.yaml")
     dronecan_python_default = os.path.expanduser("~/miniconda3/envs/auv_ros2/bin/python")
     if not os.path.exists(dronecan_python_default):
         dronecan_python_default = "python3"
 
     launch_arguments = [
         # Core connections
+        DeclareLaunchArgument(
+            "use_sim_time",
+            default_value="false",
+            description="Use ROS /clock. Keep false on the physical vehicle.",
+        ),
         DeclareLaunchArgument("fcu_url", default_value="/dev/ttyACM0:57600"),
+        DeclareLaunchArgument("gcs_url", default_value=""),
         DeclareLaunchArgument("mavros_launch_file", default_value=mavros_default),
+        DeclareLaunchArgument("mavros_sim_launch_file", default_value=mavros_sim_default),
         DeclareLaunchArgument("configure_mavros_imu_rate", default_value="true"),
         DeclareLaunchArgument("mavros_imu_rate_hz", default_value="50.0"),
         DeclareLaunchArgument("mavros_raw_imu_rate_hz", default_value="50.0"),
@@ -102,11 +119,16 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("imu_yaw", default_value="0.0"),
         DeclareLaunchArgument("dvl_ip", default_value="192.168.194.95"),
         DeclareLaunchArgument("use_dvl", default_value="true"),
+        DeclareLaunchArgument("use_joy2mavros", default_value="true"),
+        DeclareLaunchArgument("use_battery_bridge", default_value="true"),
+        DeclareLaunchArgument("use_odom2mavros", default_value="true"),
+        DeclareLaunchArgument("publish_static_tf", default_value="true"),
         DeclareLaunchArgument("dvl_launch_file", default_value=dvl_default),
         DeclareLaunchArgument("configure_dvl_acoustic_on_startup", default_value="true"),
         DeclareLaunchArgument("dvl_startup_acoustic_enabled", default_value="true"),
         DeclareLaunchArgument("request_dvl_config_on_startup", default_value="true"),
         DeclareLaunchArgument("use_localization", default_value="true"),
+        DeclareLaunchArgument("use_ekf", default_value="true"),
         DeclareLaunchArgument("localization_params_file", default_value=localization_default),
         DeclareLaunchArgument("dvl_twist_min_linear_variance", default_value="0.005"),
         DeclareLaunchArgument("dvl_twist_max_linear_variance", default_value="1.0"),
@@ -116,6 +138,14 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("dvl_twist_min_valid_beams", default_value="4"),
         DeclareLaunchArgument("dvl_twist_reacquire_good_samples", default_value="3"),
         DeclareLaunchArgument("dvl_twist_reacquire_duration", default_value="0.0"),
+        DeclareLaunchArgument(
+            "dvl_input_velocity_is_frd",
+            default_value="true",
+            description=(
+                "Convert physical A50 /dvl/data velocity from FRD "
+                "(forward/right/down) to ROS FLU before localization."
+            ),
+        ),
         DeclareLaunchArgument("use_dvl_position_odom", default_value="true"),
         DeclareLaunchArgument("dvl_position_odom_topic", default_value="/dvl/odometry"),
         DeclareLaunchArgument("dvl_position_frame", default_value="dvl_odom"),
@@ -133,6 +163,9 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("pressure_topic", default_value="/mavros/imu/static_pressure"),
         DeclareLaunchArgument("pressure_input_mode", default_value="pressure_pa"),
         DeclareLaunchArgument("fluid_density", default_value="1000.0"),
+        DeclareLaunchArgument("surface_pressure_pa", default_value="101325.0"),
+        DeclareLaunchArgument("depth_zero_at_start", default_value="true"),
+        DeclareLaunchArgument("depth_offset_m", default_value="0.0"),
         DeclareLaunchArgument("joy_axis_deadzone", default_value="0.08"),
         DeclareLaunchArgument("joy_vertical_axis_deadzone", default_value="0.10"),
         DeclareLaunchArgument("joy_pwm_range", default_value="300.0"),
@@ -154,16 +187,29 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("buoy_hold_mode", default_value="ALT_HOLD"),
         DeclareLaunchArgument("buoy_guided_mode", default_value="GUIDED"),
         DeclareLaunchArgument("enable_battery_dynamic_id_server", default_value="true"),
+        # These compatibility switches are owned by the separate GUI/visualizer
+        # packages.  Accepting them keeps the simulator launcher compatible
+        # without starting duplicate processes from the physical AUV package.
+        DeclareLaunchArgument("use_web_gui", default_value="false"),
+        DeclareLaunchArgument("use_rviz", default_value="false"),
+        DeclareLaunchArgument("use_mission_rviz_visualizer", default_value="false"),
     ]
 
+    use_sim_time = LaunchConfiguration("use_sim_time")
     fcu_url = LaunchConfiguration("fcu_url")
+    gcs_url = LaunchConfiguration("gcs_url")
     dvl_ip = LaunchConfiguration("dvl_ip")
     use_dvl = LaunchConfiguration("use_dvl")
+    use_joy2mavros = LaunchConfiguration("use_joy2mavros")
+    use_battery_bridge = LaunchConfiguration("use_battery_bridge")
+    use_odom2mavros = LaunchConfiguration("use_odom2mavros")
+    publish_static_tf = LaunchConfiguration("publish_static_tf")
     dvl_launch_file = LaunchConfiguration("dvl_launch_file")
     configure_dvl_acoustic_on_startup = LaunchConfiguration("configure_dvl_acoustic_on_startup")
     dvl_startup_acoustic_enabled = LaunchConfiguration("dvl_startup_acoustic_enabled")
     request_dvl_config_on_startup = LaunchConfiguration("request_dvl_config_on_startup")
     use_localization = LaunchConfiguration("use_localization")
+    use_ekf = LaunchConfiguration("use_ekf")
     localization_params_file = LaunchConfiguration("localization_params_file")
     dvl_twist_min_linear_variance = LaunchConfiguration("dvl_twist_min_linear_variance")
     dvl_twist_max_linear_variance = LaunchConfiguration("dvl_twist_max_linear_variance")
@@ -190,9 +236,13 @@ def generate_launch_description() -> LaunchDescription:
     dvl_position_max_speed = LaunchConfiguration("dvl_position_max_speed")
     dvl_position_reset_origin_on_jump = LaunchConfiguration(
         "dvl_position_reset_origin_on_jump")
+    dvl_input_velocity_is_frd = LaunchConfiguration("dvl_input_velocity_is_frd")
     pressure_topic = LaunchConfiguration("pressure_topic")
     pressure_input_mode = LaunchConfiguration("pressure_input_mode")
     fluid_density = LaunchConfiguration("fluid_density")
+    surface_pressure_pa = LaunchConfiguration("surface_pressure_pa")
+    depth_zero_at_start = LaunchConfiguration("depth_zero_at_start")
+    depth_offset_m = LaunchConfiguration("depth_offset_m")
     joy_axis_deadzone = LaunchConfiguration("joy_axis_deadzone")
     joy_vertical_axis_deadzone = LaunchConfiguration("joy_vertical_axis_deadzone")
     joy_pwm_range = LaunchConfiguration("joy_pwm_range")
@@ -201,6 +251,7 @@ def generate_launch_description() -> LaunchDescription:
     alt_hold_entry_neutral_sec = LaunchConfiguration("alt_hold_entry_neutral_sec")
     alt_hold_post_entry_neutral_sec = LaunchConfiguration("alt_hold_post_entry_neutral_sec")
     mavros_launch_file = LaunchConfiguration("mavros_launch_file")
+    mavros_sim_launch_file = LaunchConfiguration("mavros_sim_launch_file")
     configure_mavros_imu_rate = LaunchConfiguration("configure_mavros_imu_rate")
     mavros_imu_rate_hz = LaunchConfiguration("mavros_imu_rate_hz")
     mavros_raw_imu_rate_hz = LaunchConfiguration("mavros_raw_imu_rate_hz")
@@ -252,18 +303,41 @@ def generate_launch_description() -> LaunchDescription:
     dvl_enabled = IfCondition(
         PythonExpression(["'", use_dvl, "' == 'true' and '", dvl_launch_file, "' != ''"]))
     localization_enabled = IfCondition(PythonExpression(["'", use_localization, "' == 'true'"]))
+    ekf_enabled = IfCondition(PythonExpression([
+        "'", use_localization, "' == 'true' and '", use_ekf, "' == 'true'",
+    ]))
     dvl_position_odom_enabled = IfCondition(
         PythonExpression([
             "'", use_localization, "' == 'true' and '",
             use_dvl, "' == 'true' and '",
             use_dvl_position_odom, "' == 'true'",
         ]))
-    mavros_enabled = IfCondition(PythonExpression(["'", mavros_launch_file, "' != ''"]))
+    mavros_real_enabled = IfCondition(PythonExpression([
+        "'", use_sim_time, "'.lower() not in ('true', '1', 'yes') and '",
+        mavros_launch_file, "' != ''",
+    ]))
+    mavros_sim_enabled = IfCondition(PythonExpression([
+        "'", use_sim_time, "'.lower() in ('true', '1', 'yes') and '",
+        mavros_sim_launch_file, "' != ''",
+    ]))
     mavros_imu_rate_config_enabled = IfCondition(
         PythonExpression([
-            "'", mavros_launch_file, "' != '' and '",
+            "'", use_sim_time, "'.lower() not in ('true', '1', 'yes') and '",
+            mavros_launch_file, "' != '' and '",
             configure_mavros_imu_rate, "' == 'true'",
         ]))
+    joy2mavros_enabled = IfCondition(PythonExpression([
+        "'", use_joy2mavros, "' == 'true'",
+    ]))
+    battery_bridge_enabled = IfCondition(PythonExpression([
+        "'", use_battery_bridge, "' == 'true'",
+    ]))
+    odom2mavros_enabled = IfCondition(PythonExpression([
+        "'", use_odom2mavros, "' == 'true'",
+    ]))
+    static_tf_enabled = IfCondition(PythonExpression([
+        "'", publish_static_tf, "' == 'true'",
+    ]))
     buoy_control_enabled = IfCondition(PythonExpression(["'", use_buoy_control, "' == 'true'"]))
 
     launch_actions = [
@@ -276,8 +350,15 @@ def generate_launch_description() -> LaunchDescription:
         #     msg="[rov_start] DVL launch file not found. Skipping DVL include.",
         # ),
         LogInfo(
-            condition=IfCondition(PythonExpression(["'", mavros_launch_file, "' == ''"])),
-            msg="[rov_start] MAVROS launch file not found. Skipping MAVROS include.",
+            condition=IfCondition(PythonExpression([
+                "('", use_sim_time,
+                "'.lower() in ('true', '1', 'yes') and '",
+                mavros_sim_launch_file,
+                "' == '') or ('", use_sim_time,
+                "'.lower() not in ('true', '1', 'yes') and '",
+                mavros_launch_file, "' == '')",
+            ])),
+            msg="[rov_start] Selected MAVROS launch file is empty; skipping MAVROS.",
         ),
         LogInfo(
             condition=IfCondition(
@@ -301,8 +382,13 @@ def generate_launch_description() -> LaunchDescription:
         # 2) MAVROS
         IncludeLaunchDescription(
             AnyLaunchDescriptionSource(mavros_launch_file),
-            launch_arguments={"fcu_url": fcu_url}.items(),
-            condition=mavros_enabled,
+            launch_arguments={"fcu_url": fcu_url, "gcs_url": gcs_url}.items(),
+            condition=mavros_real_enabled,
+        ),
+        IncludeLaunchDescription(
+            AnyLaunchDescriptionSource(mavros_sim_launch_file),
+            launch_arguments={"fcu_url": fcu_url, "gcs_url": gcs_url}.items(),
+            condition=mavros_sim_enabled,
         ),
         Node(
             package="hit25_auv_ros2",
@@ -315,6 +401,7 @@ def generate_launch_description() -> LaunchDescription:
                         mavros_imu_rate_hz, value_type=float),
                     "raw_imu_rate_hz": ParameterValue(
                         mavros_raw_imu_rate_hz, value_type=float),
+                    "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
                 }
             ],
             condition=mavros_imu_rate_config_enabled,
@@ -330,6 +417,8 @@ def generate_launch_description() -> LaunchDescription:
             base_to_fcu_roll,
             base_to_fcu_pitch,
             base_to_fcu_yaw,
+            use_sim_time,
+            condition=static_tf_enabled,
         ),
         _static_tf_node(
             "dvl_static_tf",
@@ -341,6 +430,8 @@ def generate_launch_description() -> LaunchDescription:
             dvl_roll,
             dvl_pitch,
             dvl_yaw,
+            use_sim_time,
+            condition=static_tf_enabled,
         ),
         _static_tf_node(
             "depth_static_tf",
@@ -352,6 +443,8 @@ def generate_launch_description() -> LaunchDescription:
             depth_roll,
             depth_pitch,
             depth_yaw,
+            use_sim_time,
+            condition=static_tf_enabled,
         ),
         _static_tf_node(
             "imu_static_tf",
@@ -363,6 +456,8 @@ def generate_launch_description() -> LaunchDescription:
             imu_roll,
             imu_pitch,
             imu_yaw,
+            use_sim_time,
+            condition=static_tf_enabled,
         ),
         # 4) AUV nodes in this package
         Node(
@@ -384,8 +479,10 @@ def generate_launch_description() -> LaunchDescription:
                         alt_hold_entry_neutral_sec, value_type=float),
                     "alt_hold_post_entry_neutral_sec": ParameterValue(
                         alt_hold_post_entry_neutral_sec, value_type=float),
+                    "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
                 }
             ],
+            condition=joy2mavros_enabled,
         ),
         Node(
             package="hit25_auv_ros2",
@@ -393,7 +490,10 @@ def generate_launch_description() -> LaunchDescription:
             name="vfr2atm_pressure",
             output="screen",
             respawn=True,
-            parameters=[{"frame_id": depth_frame}],
+            parameters=[{
+                "frame_id": depth_frame,
+                "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
+            }],
         ),
         Node(
             package="hit25_auv_ros2",
@@ -419,6 +519,9 @@ def generate_launch_description() -> LaunchDescription:
                         dvl_twist_reacquire_good_samples, value_type=int),
                     "reacquire_duration_s": ParameterValue(
                         dvl_twist_reacquire_duration, value_type=float),
+                    "input_velocity_is_frd": ParameterValue(
+                        dvl_input_velocity_is_frd, value_type=bool),
+                    "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
                 },
             ],
             condition=localization_enabled,
@@ -454,6 +557,7 @@ def generate_launch_description() -> LaunchDescription:
                         dvl_position_max_speed, value_type=float),
                     "reset_origin_on_jump": ParameterValue(
                         dvl_position_reset_origin_on_jump, value_type=bool),
+                    "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
                 },
             ],
             condition=dvl_position_odom_enabled,
@@ -469,6 +573,10 @@ def generate_launch_description() -> LaunchDescription:
                 {"input_mode": pressure_input_mode},
                 {"world_frame": "odom"},
                 {"fluid_density": ParameterValue(fluid_density, value_type=float)},
+                {"surface_pressure_pa": ParameterValue(surface_pressure_pa, value_type=float)},
+                {"zero_at_start": ParameterValue(depth_zero_at_start, value_type=bool)},
+                {"depth_offset_m": ParameterValue(depth_offset_m, value_type=float)},
+                {"use_sim_time": ParameterValue(use_sim_time, value_type=bool)},
             ],
             condition=localization_enabled,
         ),
@@ -478,8 +586,11 @@ def generate_launch_description() -> LaunchDescription:
             name="ekf_filter_node",
             output="screen",
             respawn=True,
-            parameters=[localization_params_file],
-            condition=localization_enabled,
+            parameters=[
+                localization_params_file,
+                {"use_sim_time": ParameterValue(use_sim_time, value_type=bool)},
+            ],
+            condition=ekf_enabled,
         ),
         Node(
             package="hit25_auv_ros2",
@@ -487,6 +598,10 @@ def generate_launch_description() -> LaunchDescription:
             name="odom2mavros",
             output="screen",
             respawn=True,
+            parameters=[{
+                "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
+            }],
+            condition=odom2mavros_enabled,
         ),
         Node(
             package="hit25_auv_ros2",
@@ -501,6 +616,7 @@ def generate_launch_description() -> LaunchDescription:
                 {"use_buoy_z": ParameterValue(use_buoy_z, value_type=bool)},
                 {"hold_mode": buoy_hold_mode},
                 {"guided_mode": buoy_guided_mode},
+                {"use_sim_time": ParameterValue(use_sim_time, value_type=bool)},
             ],
             condition=buoy_control_enabled,
         ),
@@ -517,9 +633,11 @@ def generate_launch_description() -> LaunchDescription:
                     "enable_dynamic_id_server": ParameterValue(
                         enable_battery_dynamic_id_server,
                         value_type=bool,
-                    )
+                    ),
+                    "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
                 }
             ],
+            condition=battery_bridge_enabled,
         ),
     ]
 

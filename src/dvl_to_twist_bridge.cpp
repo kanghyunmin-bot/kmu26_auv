@@ -27,6 +27,7 @@ public:
     require_valid_velocity_ = declare_parameter<bool>("require_valid_velocity", true);
     reacquire_good_samples_ = declare_parameter<int>("reacquire_good_samples", 3);
     reacquire_duration_s_ = declare_parameter<double>("reacquire_duration_s", 0.0);
+    input_velocity_is_frd_ = declare_parameter<bool>("input_velocity_is_frd", true);
 
     const auto sensor_qos = rclcpp::SensorDataQoS();
 
@@ -48,6 +49,10 @@ public:
       get_logger(),
       "DVL reacquire gate: good_samples=%d duration=%.2fs",
       reacquire_good_samples_, reacquire_duration_s_);
+    RCLCPP_INFO(
+      get_logger(),
+      "DVL velocity frame conversion: input=%s output=ROS FLU",
+      input_velocity_is_frd_ ? "sensor FRD (x forward, y right, z down)" : "ROS FLU");
   }
 
 private:
@@ -71,9 +76,14 @@ private:
       out.header.frame_id = output_frame_id_;
     }
 
+    // The physical Water Linked A50 driver publishes the sensor JSON velocity
+    // unchanged: x forward, y right, z down (FRD).  robot_localization expects
+    // a ROS body-frame twist: x forward, y left, z up (FLU).  Keep this
+    // conversion at the physical/simulator message boundary so both producers
+    // obey exactly the same /dvl/data contract.
     out.twist.twist.linear.x = msg->velocity.x;
-    out.twist.twist.linear.y = msg->velocity.y;
-    out.twist.twist.linear.z = msg->velocity.z;
+    out.twist.twist.linear.y = input_velocity_is_frd_ ? -msg->velocity.y : msg->velocity.y;
+    out.twist.twist.linear.z = input_velocity_is_frd_ ? -msg->velocity.z : msg->velocity.z;
 
     auto & cov = out.twist.covariance;
     cov.fill(0.0);
@@ -92,6 +102,10 @@ private:
       cov[0] = default_linear_variance_;
       cov[7] = default_linear_variance_;
       cov[14] = default_linear_variance_;
+    }
+
+    if (input_velocity_is_frd_) {
+      convert_covariance_frd_to_flu(cov);
     }
 
     if (has_rejected_covariance(cov)) {
@@ -178,6 +192,18 @@ private:
     return std::max(value, min_linear_variance_);
   }
 
+  static void convert_covariance_frd_to_flu(std::array<double, 36> & covariance)
+  {
+    // C_flu = S C_frd S^T.  The angular signs are included for a complete
+    // Twist covariance even though the current DVL only supplies linear data.
+    constexpr std::array<double, 6> signs{{1.0, -1.0, -1.0, 1.0, -1.0, -1.0}};
+    for (size_t row = 0; row < signs.size(); ++row) {
+      for (size_t col = 0; col < signs.size(); ++col) {
+        covariance[row * 6 + col] *= signs[row] * signs[col];
+      }
+    }
+  }
+
   void reset_reacquisition()
   {
     reacquired_ = false;
@@ -219,6 +245,7 @@ private:
   bool require_valid_velocity_;
   int reacquire_good_samples_;
   double reacquire_duration_s_;
+  bool input_velocity_is_frd_;
   bool reacquired_{false};
   int consecutive_good_samples_{0};
   rclcpp::Time first_good_time_{0, 0, RCL_ROS_TIME};
